@@ -33,8 +33,10 @@ from .electrical_solver import (
     CurrentTerminal,
     ElectricalConfig,
     build_electrical_supernet_map,
+    build_electrical_connectivity_report,
     net_key_from_obj,
     net_key_from_values,
+    prepare_electrical_geometry,
     solve_electrical_heating,
 )
 from .adaptive_mesh import build_adaptive_mesh, build_adaptive_system
@@ -49,7 +51,8 @@ from .thermal_solver import (
 from .pwl_parser import parse_pwl_file
 from .visualization import (
     save_snapshot, show_results_top_bot, show_results_all_layers, save_preview_image,
-    build_interactive_heatmap_payload, save_joule_loss_map
+    build_interactive_heatmap_payload, save_joule_loss_map,
+    save_electrical_connectivity_preview,
 )
 from .thermal_report import write_html_report
 from .workflow import (
@@ -1196,6 +1199,7 @@ class ThermalPlugin(pcbnew.ActionPlugin):
         dlg = SettingsDialog(
             self.host_window, len(pads_list), suggested_res, layer_names,
             preview_callback=self.generate_preview,
+            electrical_preview_callback=self.generate_electrical_preview,
             selection_provider=selection_provider,
             run_callback=run_callback,
             close_callback=close_callback,
@@ -1759,6 +1763,53 @@ class ThermalPlugin(pcbnew.ActionPlugin):
         if not output_file:
             wx.MessageBox("Board data missing for preview", "Error")
         return output_file
+
+    def generate_electrical_preview(self, settings, layer_names):
+        """Render active electrical nets from the solver's prepared rasters."""
+        if not self._require_filled_zones(self.board):
+            return None
+        terminals, missing = self._resolve_current_terminals(self.board, settings)
+        if missing:
+            wx.MessageBox("Current terminals missing from board:\n" + "\n".join(missing), "ThermalSim")
+            return None
+        if not terminals:
+            wx.MessageBox("Configure active current terminals to preview electrical connectivity.", "ThermalSim")
+            return None
+        power_pads = self._resolve_power_pad_objects(self.board, settings, legacy_pads=self.pads_list)
+        focus_pads = self._unique_pads(power_pads + [item.pad for item in terminals])
+        area = _estimate_simulation_area(
+            self.board, self.bbox, settings, power_pads=power_pads, terminals=terminals,
+            electrical_supernets=build_electrical_supernet_map(self.board),
+        )
+        grid = _estimate_solver_grid(
+            self.bbox, float(settings["res"]), settings, len(self.copper_ids),
+            focus_pads, area=area,
+        )
+        stack_info = self.stack_info if self.stack_info is not None else parse_stackup_from_board_file(self.board)
+        thickness = self._derive_stackup_thicknesses(
+            self.board, self.copper_ids, stack_info, settings
+        )["copper_thickness_mm_used"]
+        config = ElectricalConfig(
+            copper_ids=list(self.copper_ids), rows=grid.rows, cols=grid.cols,
+            x_min=grid.x_min_mm, y_min=grid.y_min_mm, res=grid.actual_res_mm,
+            t_cu=np.asarray([max(1e-9, value * 1e-3) for value in thickness]),
+            layer_names={lid: layer_names[idx] for idx, lid in enumerate(self.copper_ids)
+                         if idx < len(layer_names)},
+        )
+        prepared = prepare_electrical_geometry(self.board, terminals, config)
+        out_dir = settings.get("output_dir") or os.path.dirname(__file__)
+        path = save_electrical_connectivity_preview(
+            prepared, config, terminals, layer_names, out_dir=out_dir, open_file=True,
+            connectivity_report=build_electrical_connectivity_report(
+                prepared, terminals, config
+            ),
+        )
+        if prepared.collision_count:
+            wx.MessageBox(
+                f"The electrical solver would reject {prepared.collision_count} cells where unrelated active nets overlap.",
+                "Electrical Preview Diagnostic",
+            )
+        return path
 
     def _run_simulation(self, board, copper_ids, layer_names, bbox, pads_list,
                         settings, stack_info, pad_names, zone_refill_s=0.0,

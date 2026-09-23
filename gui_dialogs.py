@@ -61,7 +61,7 @@ TOOLTIP_TEXTS = {
     'grid_target_cells': "Legacy coarsening target retained for settings compatibility.",
     'capabilities': "Detected solver backends. PyPardiso accelerates large grids significantly.",
     'help': "Open the ThermalSim documentation in your web browser.",
-    'preview': "Generate a geometry preview image without running the simulation.",
+    'preview': "Map copper, pads, vias, and the simulation area without running the thermal solver.",
     'load_settings': "Load simulation settings from a JSON file.",
     'save_settings': "Save the current simulation settings to a JSON file.",
     'current_enable': "Enable DC current-flow simulation for Joule heating in traces and copper pours.",
@@ -420,6 +420,7 @@ class SettingsDialog(wx.Dialog):
         board_size_mm=None,
         defer_initial_preflight=False,
         electrical_supernets=None,
+        electrical_preview_callback=None,
     ):
         dialog_style = (
             getattr(wx, "DEFAULT_DIALOG_STYLE", 0)
@@ -431,6 +432,7 @@ class SettingsDialog(wx.Dialog):
         self.board_name = str(board_name or "Unsaved board")
         self.board_size_mm = tuple(board_size_mm or ())
         self.preview_callback = preview_callback
+        self.electrical_preview_callback = electrical_preview_callback
         self.selection_provider = selection_provider
         self.run_callback = run_callback
         self.close_callback = close_callback
@@ -554,7 +556,19 @@ class SettingsDialog(wx.Dialog):
         self.btn_more.Bind(wx.EVT_BUTTON, self._on_more)
         footer.Add(self.btn_more, 0, wx.ALL, 4)
 
-        self.btn_preview = wx.Button(self.footer_actions_panel, label="Preview")
+        self.btn_electrical_preview = wx.Button(
+            self.footer_actions_panel, label="Electrical Preview"
+        )
+        self.btn_electrical_preview.Bind(wx.EVT_BUTTON, self._on_electrical_preview)
+        self.btn_electrical_preview.Enable(bool(self.electrical_preview_callback))
+        self.btn_electrical_preview.SetToolTip(
+            "Show the electrical raster and directional connections used by current heating."
+        )
+        footer.Add(self.btn_electrical_preview, 0, wx.ALL, 4)
+
+        self.btn_preview = wx.Button(
+            self.footer_actions_panel, label="Thermal Geometry Preview"
+        )
         self.btn_preview.Bind(wx.EVT_BUTTON, self._on_preview)
         self.btn_preview.SetToolTip(TOOLTIP_TEXTS['preview'])
         footer.Add(self.btn_preview, 0, wx.ALL, 4)
@@ -1305,33 +1319,43 @@ class SettingsDialog(wx.Dialog):
             pass
 
     def _on_preview(self, event):
-        """Handle Preview button click."""
-        if self.preview_callback:
-            settings = self.get_values()
-            if settings and self._refresh_preflight(settings):
+        """Handle Thermal Geometry Preview button click."""
+        self._run_preview(self.preview_callback, self.btn_preview, "thermal geometry")
+
+    def _on_electrical_preview(self, event):
+        """Handle the electrical connectivity preview action."""
+        self._run_preview(
+            self.electrical_preview_callback,
+            self.btn_electrical_preview,
+            "electrical",
+        )
+
+    def _run_preview(self, callback, button, kind):
+        if not callback:
+            return
+        settings = self.get_values()
+        if not settings or not self._refresh_preflight(settings):
+            return
+        self._set_footer_status(f"Building {kind} preview...", f"Preparing {kind} geometry.")
+        button.Enable(False)
+        try:
+            output_path = callback(settings, self.layer_names)
+            if output_path:
                 self._set_footer_status(
-                    "Building preview...",
-                    "Extracting and rasterizing board geometry.",
+                    f"{kind.capitalize()} preview ready", os.path.basename(output_path)
                 )
-                self.btn_preview.Enable(False)
-                try:
-                    output_path = self.preview_callback(settings, self.layer_names)
-                    if output_path:
-                        self._set_footer_status(
-                            "Preview ready", os.path.basename(output_path)
-                        )
-                    else:
-                        self._set_footer_status(
-                            "Preview failed", "No preview image was created."
-                        )
-                except Exception:
-                    self._set_footer_status(
-                        "Preview failed",
-                        "The geometry preview could not be created.",
-                    )
-                    wx.MessageBox("Geometry preview failed.", "ThermalSim")
-                finally:
-                    self.btn_preview.Enable(True)
+            else:
+                self._set_footer_status(
+                    f"{kind.capitalize()} preview failed", "No preview image was created."
+                )
+        except Exception:
+            self._set_footer_status(
+                f"{kind.capitalize()} preview failed",
+                f"The {kind} preview could not be created.",
+            )
+            wx.MessageBox(f"{kind.capitalize()} preview failed.", "ThermalSim")
+        finally:
+            button.Enable(True)
 
     def _on_run(self, event):
         """Handle Run button click for modal and modeless workflows."""
@@ -1729,6 +1753,16 @@ class SettingsDialog(wx.Dialog):
     def _refresh_context_summary(self):
         """Refresh persistent heat-source and current-flow context."""
         power_text = summarize_power_pads(self.power_pads)
+        active_current = any(
+            abs(float(pad.get("current_a", 0.0) or 0.0)) > 0.0
+            for group in self.current_groups
+            for pad in group.get("pads", [])
+        )
+        self.btn_electrical_preview.Enable(
+            bool(self.electrical_preview_callback)
+            and self.chk_current_enabled.GetValue()
+            and active_current
+        )
         if not self.chk_current_enabled.GetValue():
             current_text = "Current heating off"
         else:

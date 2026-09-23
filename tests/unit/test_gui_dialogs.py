@@ -1014,3 +1014,42 @@ class TestSimulationDetailSettings:
         assert values['area_mode'] == 'active'
         assert values['area_margin_mm'] == 15.0
         assert values['limit_area'] is True
+
+
+class TestPreviewActions:
+    """Tests for the dialog's preview labels and workflow."""
+
+    def test_electrical_preview_precedes_thermal_geometry_preview(self):
+        from ThermalSim.gui_dialogs import SettingsDialog
+
+        dlg = SettingsDialog(
+            None, 0, 0.5, ["F.Cu", "B.Cu"],
+            preview_callback=lambda *_: None,
+            electrical_preview_callback=lambda *_: None,
+        )
+        buttons = [
+            item for item in dlg.footer_actions_panel._sizer.items
+            if item is not None
+        ]
+
+        assert [button.label for button in buttons] == [
+            "More", "Electrical Preview", "Thermal Geometry Preview",
+            "Run Simulation", "Close",
+        ]
+
+    def test_electrical_preview_requires_enabled_current_and_active_terminals(self):
+        from ThermalSim.gui_dialogs import SettingsDialog
+
+        dlg = SettingsDialog(
+            None, 0, 0.5, ["F.Cu", "B.Cu"],
+            electrical_preview_callback=lambda *_: None,
+        )
+        assert not dlg.btn_electrical_preview.IsEnabled()
+
+        dlg.current_groups = [{"pads": [{"current_a": 1.0}]}]
+        dlg._refresh_context_summary()
+        assert not dlg.btn_electrical_preview.IsEnabled()
+
+        dlg.chk_current_enabled.SetValue(True)
+        dlg._refresh_context_summary()
+        assert dlg.btn_electrical_preview.IsEnabled()
