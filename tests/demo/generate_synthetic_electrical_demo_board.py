@@ -124,7 +124,7 @@ body.append(via("d-via", (90.35, 54), 1.2, 0.5, net_d))
 body.append(pad_footprint("d-sink-pad", "D2", (112, 54), "In1.Cu", net_d, 1.2))
 body.append(segment("d-in1-track", (90.35, 54), (112, 54), 0.6, "In1.Cu", net_d))
 
-header = '''(kicad_pcb\n\t(version 20260206)\n\t(generator "pcbnew")\n\t(generator_version "10.0")\n\t(general\n\t\t(thickness 1.6)\n\t\t(legacy_teardrops no)\n\t)\n\t(paper "A4")\n\t(layers\n\t\t(0 "F.Cu" signal)\n\t\t(4 "In1.Cu" signal)\n\t\t(2 "B.Cu" signal)\n\t\t(5 "F.SilkS" user "F.Silkscreen")\n\t\t(7 "B.SilkS" user "B.Silkscreen")\n\t\t(1 "F.Mask" user)\n\t\t(3 "B.Mask" user)\n\t\t(25 "Edge.Cuts" user)\n\t\t(35 "F.Fab" user)\n\t)\n\t(setup\n\t\t(pad_to_mask_clearance 0)\n\t)\n'''
+header = '''(kicad_pcb\n\t(version 20260206)\n\t(generator "pcbnew")\n\t(generator_version "10.0")\n\t(general\n\t\t(thickness 1.6)\n\t\t(legacy_teardrops no)\n\t)\n\t(paper "A4")\n\t(layers\n\t\t(0 "F.Cu" signal)\n\t\t(4 "In1.Cu" signal)\n\t\t(6 "In2.Cu" signal)\n\t\t(2 "B.Cu" signal)\n\t\t(5 "F.SilkS" user "F.Silkscreen")\n\t\t(7 "B.SilkS" user "B.Silkscreen")\n\t\t(1 "F.Mask" user)\n\t\t(3 "B.Mask" user)\n\t\t(25 "Edge.Cuts" user)\n\t\t(35 "F.Fab" user)\n\t)\n\t(setup\n\t\t(pad_to_mask_clearance 0)\n\t)\n'''
 footer = '\t(embedded_fonts no)\n)\n'
 OUT.write_text(header + ''.join(body) + footer, encoding='utf-8')
 print(OUT)
