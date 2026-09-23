@@ -532,7 +532,9 @@ def write_html_report(
 
     total_thick_mm = stackup_derived.get("total_thick_mm_used")
     board_thick_mm = stackup_derived.get("stack_board_thick_mm")
+    board_copper_thicknesses = stackup_derived.get("copper_thickness_mm_board", [])
     copper_thicknesses = stackup_derived.get("copper_thickness_mm_used", [])
+    copper_overrides = stackup_derived.get("copper_thickness_override_active", [])
     gaps_used = stackup_derived.get("gap_mm_used", [])
     gap_fallback_used = stackup_derived.get("gap_fallback_used", False)
     snapshot_items = _build_snapshot_items(out_dir, snapshot_files)
@@ -541,7 +543,14 @@ def write_html_report(
 
     copper_rows = []
     for i, thickness in enumerate(copper_thicknesses):
-        copper_rows.append((layer_names[i] if i < len(layer_names) else f"Layer {i}", _fmt(thickness, " mm")))
+        board_thickness = board_copper_thicknesses[i] if i < len(board_copper_thicknesses) else thickness
+        overridden = bool(copper_overrides[i]) if i < len(copper_overrides) else False
+        copper_rows.append((
+            layer_names[i] if i < len(layer_names) else f"Layer {i}",
+            _fmt(board_thickness, " mm"),
+            _fmt(thickness, " mm"),
+            "Override" if overridden else "KiCad stackup",
+        ))
     gap_rows = []
     for i, gap in enumerate(gaps_used):
         src = layer_names[i] if i < len(layer_names) else f"Layer {i}"
@@ -576,6 +585,7 @@ def write_html_report(
         ("Board thickness (stackup)", _fmt(board_thick_mm, " mm")),
         ("Total thickness used", _fmt(total_thick_mm, " mm")),
         ("Uniform gap fallback used", str(bool(gap_fallback_used))),
+        ("Copper thickness overrides active", str(any(copper_overrides))),
         ("Layer names", ", ".join(layer_names) if layer_names else "n/a"),
     ]
 
@@ -621,7 +631,7 @@ def write_html_report(
         "<div class='details-grid'><div>"
         "<h3 class='section-title'>Stackup</h3>"
         f"{_table_html(['Metric', 'Value'], thickness_summary_rows)}<div class='spacer-sm'></div>"
-        f"{_table_html(['Layer', 'Thickness'], copper_rows)}<div class='spacer-sm'></div>"
+        f"{_table_html(['Layer', 'KiCad thickness', 'Simulation thickness', 'Source'], copper_rows)}<div class='spacer-sm'></div>"
         f"{_table_html(['Interface', 'Gap'], gap_rows)}<div class='spacer-sm'></div>"
         "<h3 class='section-title'>Effective Dielectric Thickness</h3>"
         f"{_table_html(['Plane', 't_fr4_eff'], fr4_eff_rows)}"

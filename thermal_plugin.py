@@ -77,6 +77,22 @@ GRID_DETAIL_PRESETS = {
     "detailed": (1_600_000, 800_000),
     "very_detailed": (3_000_000, 1_500_000),
 }
+
+COPPER_THICKNESS_MIN_MM = 0.001
+COPPER_THICKNESS_MAX_MM = 1.0
+
+
+def _effective_copper_thickness_mm(board_thickness_mm, layer_id, settings):
+    """Return the simulation copper thickness and whether it is overridden."""
+    overrides = settings.get("copper_thickness_overrides_mm", {}) if isinstance(settings, dict) else {}
+    value = overrides.get(str(layer_id)) if isinstance(overrides, dict) else None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return float(board_thickness_mm), False
+    if math.isfinite(value) and COPPER_THICKNESS_MIN_MM <= value <= COPPER_THICKNESS_MAX_MM:
+        return value, True
+    return float(board_thickness_mm), False
 DEFAULT_GRID_DETAIL = "balanced"
 DEFAULT_GRID_NODE_BUDGET = GRID_DETAIL_PRESETS[DEFAULT_GRID_DETAIL][0]
 
@@ -458,6 +474,27 @@ def _effective_fr4_control_volume_thicknesses(
     if count > 2:
         thicknesses[1:-1] = 0.5 * (gaps[:-1] + gaps[1:])
     return np.clip(thicknesses, 1e-6, 5e-3)
+
+
+def _build_heat_capacity_array(
+    copper_mask, t_cu, t_fr4_eff, pixel_area, rho_cu, cp_cu,
+    rho_fr4, cp_fr4, heatsink_mask=None, pad_cap_areal=0.0,
+):
+    """Build per-cell thermal capacitance from effective layer thicknesses."""
+    layer_count, rows, cols = copper_mask.shape
+    capacities = np.empty((layer_count, rows, cols), dtype=np.float64)
+    for layer in range(layer_count):
+        copper_volume = pixel_area * t_cu[layer]
+        fr4_volume = pixel_area * t_fr4_eff[layer]
+        mask = copper_mask[layer]
+        capacity = np.where(
+            mask, rho_cu * cp_cu * copper_volume, rho_fr4 * cp_fr4 * fr4_volume
+        )
+        capacity += mask * (rho_fr4 * cp_fr4 * fr4_volume)
+        capacities[layer] = capacity
+    if pad_cap_areal > 0.0 and heatsink_mask is not None and np.any(heatsink_mask):
+        capacities[-1] += pad_cap_areal * pixel_area * heatsink_mask
+    return capacities.reshape(-1)
 
 
 def _bbox_bounds_mm(bbox):
@@ -1153,6 +1190,17 @@ class ThermalPlugin(pcbnew.ActionPlugin):
         last_settings = self._load_settings()
         if last_settings.get("output_dir") and os.path.isdir(last_settings.get("output_dir")):
             default_output_dir = last_settings.get("output_dir")
+        dialog_stackup = self._derive_stackup_thicknesses(
+            board, copper_ids, stack_info, last_settings
+        )
+        copper_layers = [
+            {
+                "layer_id": lid,
+                "name": layer_names[index] if index < len(layer_names) else str(lid),
+                "board_thickness_mm": dialog_stackup["copper_thickness_mm_board"][index],
+            }
+            for index, lid in enumerate(copper_ids)
+        ]
         electrical_supernets = build_electrical_supernet_map(board)
 
         if self.settings_dialog is not None:
@@ -1214,6 +1262,7 @@ class ThermalPlugin(pcbnew.ActionPlugin):
             board_name=os.path.basename(board_path) if board_path else "Unsaved board",
             board_size_mm=(w_mm, h_mm),
             electrical_supernets=electrical_supernets,
+            copper_layers=copper_layers,
             defer_initial_preflight=True,
         )
         self.settings_dialog = dlg
@@ -1610,15 +1659,23 @@ class ThermalPlugin(pcbnew.ActionPlugin):
                 if isinstance(name, str):
                     copper_thickness_by_name[name] = th
 
+        copper_thickness_mm_board = []
         copper_thickness_mm_used = []
+        copper_thickness_override_active = []
         for lid in copper_ids:
             th = copper_thickness_by_id.get(lid)
             if th is None:
                 lname = board.GetLayerName(lid)
                 th = copper_thickness_by_name.get(lname)
-            if not isinstance(th, (int, float)) or th <= 0:
+            if not isinstance(th, (int, float)) or not math.isfinite(th) or th <= 0:
                 th = 0.035
-            copper_thickness_mm_used.append(th)
+            board_thickness = float(th)
+            effective_thickness, overridden = _effective_copper_thickness_mm(
+                board_thickness, lid, settings
+            )
+            copper_thickness_mm_board.append(board_thickness)
+            copper_thickness_mm_used.append(effective_thickness)
+            copper_thickness_override_active.append(overridden)
 
         total_thick_mm_used = settings['thick']
         if isinstance(stack_board_thick, (int, float)) and stack_board_thick > 0:
@@ -1642,7 +1699,9 @@ class ThermalPlugin(pcbnew.ActionPlugin):
         return {
             "total_thick_mm_used": total_thick_mm_used,
             "stack_board_thick_mm": stack_board_thick,
+            "copper_thickness_mm_board": copper_thickness_mm_board,
             "copper_thickness_mm_used": copper_thickness_mm_used,
+            "copper_thickness_override_active": copper_thickness_override_active,
             "gap_mm_used": gap_mm_used,
             "gap_fallback_used": use_uniform_gap,
         }
@@ -2002,18 +2061,10 @@ class ThermalPlugin(pcbnew.ActionPlugin):
         if operator_cache_hit:
             C, K_matrix, b, hA = cached_operator
         else:
-            C_layers = np.empty((layer_count, rows, cols), dtype=np.float64)
-            for l in range(layer_count):
-                V_cu = pixel_area * t_cu[l]
-                V_fr4 = pixel_area * t_fr4_eff[l]
-                mask = copper_mask[l]
-                C_layer = np.where(mask, rho_cu * cp_cu * V_cu, rho_fr4 * cp_fr4 * V_fr4)
-                C_layer += mask * (rho_fr4 * cp_fr4 * V_fr4)
-                C_layers[l] = C_layer
-            if pad_cap_areal > 0.0 and np.any(H_map):
-                pad_cap_per_cell = pad_cap_areal * pixel_area
-                C_layers[-1] += pad_cap_per_cell * H_map
-            C = C_layers.reshape(-1)
+            C = _build_heat_capacity_array(
+                copper_mask, t_cu, t_fr4_eff, pixel_area, rho_cu, cp_cu,
+                rho_fr4, cp_fr4, H_map, pad_cap_areal,
+            )
         init_timings["capacity_build_s"] = time.perf_counter() - capacity_start
         init_timings["operator_cache_hit"] = operator_cache_hit
 

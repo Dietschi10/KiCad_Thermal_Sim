@@ -8,6 +8,7 @@ persistent board context, preflight status, and result actions.
 
 import copy
 import json
+import math
 import os
 import wx
 
@@ -69,6 +70,7 @@ TOOLTIP_TEXTS = {
     'current_total': "Total current for the selected group. In distribution mode it is split evenly across all pads.",
     'current_per_pad': "Current value applied to selected pad rows in per-pad mode. If no row is selected, it is applied to all pads in the group.",
     'current_pad_list': "Comma-separated per-pad currents in the same order as the pad table, for example: +6, -4, -2.",
+    'copper_thickness': "Simulation-only copper thickness. It does not modify the KiCad board stackup.",
 }
 
 
@@ -420,6 +422,7 @@ class SettingsDialog(wx.Dialog):
         board_size_mm=None,
         defer_initial_preflight=False,
         electrical_supernets=None,
+        copper_layers=None,
         electrical_preview_callback=None,
     ):
         dialog_style = (
@@ -440,6 +443,8 @@ class SettingsDialog(wx.Dialog):
         self.load_settings_callback = load_settings_callback
         self.save_settings_callback = save_settings_callback
         self.electrical_supernets = electrical_supernets or {}
+        self.copper_layers = self._prepare_copper_layers(copper_layers, layer_names)
+        self.copper_thickness_rows = []
         self.current_groups = []
         self.current_group_index = -1
         self.power_pads = []
@@ -623,6 +628,28 @@ class SettingsDialog(wx.Dialog):
     # ------------------------------------------------------------------
     # Tab builders
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _prepare_copper_layers(copper_layers, layer_names):
+        """Normalize optional board copper data for the override controls."""
+        prepared = []
+        for index, item in enumerate(copper_layers or []):
+            if not isinstance(item, dict):
+                continue
+            thickness = _safe_float(item.get('board_thickness_mm'), 0.035)
+            if not math.isfinite(thickness) or thickness <= 0.0:
+                thickness = 0.035
+            prepared.append({
+                'layer_id': item.get('layer_id', index),
+                'name': str(item.get('name') or f"Layer {index}"),
+                'board_thickness_mm': thickness,
+            })
+        if prepared:
+            return prepared
+        return [
+            {'layer_id': index, 'name': str(name), 'board_thickness_mm': 0.035}
+            for index, name in enumerate(layer_names or [])
+        ]
 
     def _build_simulation_tab(self, panel, layer_names, stackup_details,
                               pad_names, suggested_res, default_output_dir):
@@ -811,6 +838,65 @@ class SettingsDialog(wx.Dialog):
         """Build the Advanced tab contents."""
         sizer = wx.BoxSizer(wx.VERTICAL)
 
+        # --- Copper Thickness ---
+        self.copper_thickness_pane = wx.CollapsiblePane(
+            panel, label="Copper Thickness (simulation only)"
+        )
+        copper_panel = self.copper_thickness_pane.GetPane()
+        copper_sizer = wx.BoxSizer(wx.VERTICAL)
+        copper_sizer.Add(
+            wx.StaticText(
+                copper_panel,
+                label="Overrides affect electrical loss, heat spreading, and thermal mass; the board is unchanged.",
+            ),
+            0, wx.EXPAND | wx.ALL, 3,
+        )
+        header = wx.BoxSizer(wx.HORIZONTAL)
+        for label, width in (("Layer", 130), ("KiCad (µm)", 100), ("Simulation (µm)", 130), ("Override", 85)):
+            header.Add(wx.StaticText(copper_panel, label=label, size=(width, -1)), 0, wx.RIGHT, 4)
+        copper_sizer.Add(header, 0, wx.EXPAND | wx.ALL, 3)
+        for layer in self.copper_layers:
+            row_sizer = wx.BoxSizer(wx.HORIZONTAL)
+            row_sizer.Add(wx.StaticText(copper_panel, label=layer['name'], size=(130, -1)), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+            row_sizer.Add(
+                wx.StaticText(copper_panel, label=f"{layer['board_thickness_mm'] * 1000.0:g}", size=(100, -1)),
+                0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4,
+            )
+            thickness = wx.SpinCtrlDouble(
+                copper_panel, value=str(layer['board_thickness_mm'] * 1000.0),
+                min=1.0, max=1000.0, inc=1.0,
+            )
+            thickness.SetDigits(1)
+            thickness.SetToolTip(TOOLTIP_TEXTS['copper_thickness'])
+            row_sizer.Add(thickness, 0, wx.RIGHT, 4)
+            enabled = wx.CheckBox(copper_panel, label="Use")
+            enabled.SetToolTip(TOOLTIP_TEXTS['copper_thickness'])
+            enabled.Bind(wx.EVT_CHECKBOX, self._on_copper_override_changed)
+            row_sizer.Add(enabled, 0, wx.ALIGN_CENTER_VERTICAL)
+            self.copper_thickness_rows.append({
+                **layer, 'thickness': thickness, 'enabled': enabled,
+            })
+            copper_sizer.Add(row_sizer, 0, wx.EXPAND | wx.ALL, 2)
+
+        actions = wx.BoxSizer(wx.HORIZONTAL)
+        actions.Add(wx.StaticText(copper_panel, label="Set all (µm)"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        self.copper_set_all_input = wx.SpinCtrlDouble(
+            copper_panel, value="35", min=1.0, max=1000.0, inc=1.0,
+        )
+        self.copper_set_all_input.SetDigits(1)
+        actions.Add(self.copper_set_all_input, 0, wx.RIGHT, 4)
+        set_all = wx.Button(copper_panel, label="Set all copper layers")
+        set_all.Bind(wx.EVT_BUTTON, self._on_set_all_copper_thickness)
+        actions.Add(set_all, 0, wx.RIGHT, 4)
+        reset = wx.Button(copper_panel, label="Reset to KiCad stackup")
+        reset.Bind(wx.EVT_BUTTON, self._on_reset_copper_thickness)
+        actions.Add(reset, 0)
+        copper_sizer.Add(actions, 0, wx.EXPAND | wx.ALL, 3)
+        self.lbl_copper_thickness_status = wx.StaticText(copper_panel, label="Using KiCad copper thicknesses")
+        copper_sizer.Add(self.lbl_copper_thickness_status, 0, wx.EXPAND | wx.ALL, 3)
+        copper_panel.SetSizer(copper_sizer)
+        sizer.Add(self.copper_thickness_pane, 0, wx.EXPAND | wx.ALL, 5)
+
         # --- Geometry Filters ---
         self.geometry_pane = wx.CollapsiblePane(panel, label="Geometry")
         self.geometry_pane.Expand()
@@ -959,10 +1045,58 @@ class SettingsDialog(wx.Dialog):
 
         pane_event = getattr(wx, "EVT_COLLAPSIBLEPANE_CHANGED", None)
         if pane_event is not None:
-            for pane in (self.geometry_pane, self.thermal_pad_pane, self.solver_pane):
+            for pane in (
+                self.copper_thickness_pane, self.geometry_pane,
+                self.thermal_pad_pane, self.solver_pane,
+            ):
                 pane.Bind(pane_event, self._on_advanced_pane_changed)
 
         panel.SetSizer(sizer)
+
+    def _refresh_copper_thickness_status(self):
+        """Show whether this simulation differs from the KiCad stackup."""
+        count = sum(row['enabled'].GetValue() for row in self.copper_thickness_rows)
+        label = (
+            f"Copper thickness overrides active ({count})"
+            if count else "Using KiCad copper thicknesses"
+        )
+        self.lbl_copper_thickness_status.SetLabel(label)
+
+    def _on_copper_override_changed(self, event):
+        """Refresh the override status after a row is enabled or disabled."""
+        self._refresh_copper_thickness_status()
+        if event is not None and hasattr(event, 'Skip'):
+            event.Skip()
+
+    def _on_set_all_copper_thickness(self, event):
+        """Apply one simulation-only copper thickness to every layer."""
+        value = float(self.copper_set_all_input.GetValue())
+        if not math.isfinite(value) or not 1.0 <= value <= 1000.0:
+            wx.MessageBox("Copper thickness must be between 1 and 1000 µm.", "ThermalSim")
+            return
+        for row in self.copper_thickness_rows:
+            row['thickness'].SetValue(value)
+            row['enabled'].SetValue(True)
+        self._refresh_copper_thickness_status()
+
+    def _on_reset_copper_thickness(self, event):
+        """Remove all copper overrides and restore displayed board values."""
+        for row in self.copper_thickness_rows:
+            row['thickness'].SetValue(row['board_thickness_mm'] * 1000.0)
+            row['enabled'].SetValue(False)
+        self._refresh_copper_thickness_status()
+
+    def _copper_thickness_overrides(self):
+        """Return validated simulation-only copper overrides in millimeters."""
+        overrides = {}
+        for row in self.copper_thickness_rows:
+            if not row['enabled'].GetValue():
+                continue
+            thickness_um = float(row['thickness'].GetValue())
+            if not math.isfinite(thickness_um) or not 1.0 <= thickness_um <= 1000.0:
+                raise ValueError("Copper thickness must be between 1 and 1000 µm.")
+            overrides[str(row['layer_id'])] = thickness_um * 1e-3
+        return overrides
 
     def _build_current_tab(self, panel):
         """Build the current-path/Joule-heating tab."""
@@ -2080,6 +2214,7 @@ class SettingsDialog(wx.Dialog):
         - compute_engine : str
         - mesh_mode : str
         - adaptive_max_cell_ratio : int
+        - copper_thickness_overrides_mm : dict
         """
         try:
             self._sync_current_group_from_fields()
@@ -2138,6 +2273,7 @@ class SettingsDialog(wx.Dialog):
                 if 0 <= mesh_idx < len(mesh_modes)
                 else "adaptive"
             )
+            copper_thickness_overrides_mm = self._copper_thickness_overrides()
             return {
                 'power_str': power_str,
                 'power_pads': power_pads,
@@ -2172,6 +2308,7 @@ class SettingsDialog(wx.Dialog):
                 'time_stepping': time_stepping,
                 'current_enabled': self.chk_current_enabled.GetValue(),
                 'current_groups': current_groups,
+                'copper_thickness_overrides_mm': copper_thickness_overrides_mm,
             }
         except ValueError:
             return None
@@ -2242,6 +2379,21 @@ class SettingsDialog(wx.Dialog):
 
             if 'h_conv' in defaults:
                 self.h_conv_input.SetValue(float(defaults['h_conv']))
+
+            saved_overrides = defaults.get('copper_thickness_overrides_mm', {})
+            if isinstance(saved_overrides, dict):
+                for row in self.copper_thickness_rows:
+                    value = saved_overrides.get(str(row['layer_id']))
+                    try:
+                        value = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(value) and 0.001 <= value <= 1.0:
+                        row['thickness'].SetValue(value * 1000.0)
+                        row['enabled'].SetValue(True)
+            self._refresh_copper_thickness_status()
+            if any(row['enabled'].GetValue() for row in self.copper_thickness_rows):
+                self.copper_thickness_pane.Expand()
 
             compute_engine = str(defaults.get('compute_engine', 'auto')).lower()
             compute_engine_idx = {

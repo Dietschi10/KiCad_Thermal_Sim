@@ -1016,6 +1016,39 @@ class TestSimulationDetailSettings:
         assert values['limit_area'] is True
 
 
+class TestCopperThicknessOverrides:
+    """Settings-dialog coverage for simulation-only copper thicknesses."""
+
+    def test_serializes_and_resets_per_layer_overrides(self):
+        from ThermalSim.gui_dialogs import SettingsDialog
+
+        dlg = SettingsDialog(
+            None, 1, 0.5, ["F.Cu", "In1.Cu"],
+            copper_layers=[
+                {'layer_id': 0, 'name': 'F.Cu', 'board_thickness_mm': 0.035},
+                {'layer_id': 2, 'name': 'In1.Cu', 'board_thickness_mm': 0.105},
+            ],
+        )
+        dlg.copper_thickness_rows[1]['enabled'].SetValue(True)
+        dlg.copper_thickness_rows[1]['thickness'].SetValue(70.0)
+
+        assert dlg.get_values()['copper_thickness_overrides_mm'] == {'2': 0.07}
+
+        dlg._on_reset_copper_thickness(None)
+        assert dlg.get_values()['copper_thickness_overrides_mm'] == {}
+        assert dlg.copper_thickness_rows[1]['thickness'].GetValue() == 105.0
+
+    def test_rejects_invalid_enabled_override(self):
+        from ThermalSim.gui_dialogs import SettingsDialog
+
+        dlg = SettingsDialog(
+            None, 1, 0.5, ["F.Cu"],
+            copper_layers=[{'layer_id': 0, 'name': 'F.Cu', 'board_thickness_mm': 0.035}],
+        )
+        dlg.copper_thickness_rows[0]['enabled'].SetValue(True)
+        dlg.copper_thickness_rows[0]['thickness'].SetValue(0.0)
+
+        assert dlg.get_values() is None
 class TestPreviewActions:
     """Tests for the dialog's preview labels and workflow."""
 

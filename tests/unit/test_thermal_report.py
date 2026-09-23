@@ -138,6 +138,23 @@ class TestWriteHtmlReport:
 
         assert result is not None
         assert os.path.exists(result)
+
+    def test_report_labels_simulation_only_copper_override(self, basic_report_params):
+        """Reports must distinguish the board stackup from simulated copper."""
+        basic_report_params['stackup_derived'].update({
+            'copper_thickness_mm_board': [0.035, 0.105],
+            'copper_thickness_mm_used': [0.035, 0.070],
+            'copper_thickness_override_active': [False, True],
+        })
+
+        result = write_html_report(**basic_report_params)
+        with open(result, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        assert "Simulation thickness" in content
+        assert "Override" in content
+        assert "0.1050 mm" in content
+        assert "0.0700 mm" in content
         assert result.endswith(".html")
 
     def test_report_contains_title(self, basic_report_params):

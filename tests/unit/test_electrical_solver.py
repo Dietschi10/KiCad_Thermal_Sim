@@ -25,7 +25,7 @@ from tests.mocks.pcbnew_mock import (
 )
 
 
-def _config(layers=None, rows=4, cols=12, res=1.0):
+def _config(layers=None, rows=4, cols=12, res=1.0, copper_thickness_m=35e-6):
     return ElectricalConfig(
         copper_ids=layers or [F_Cu],
         rows=rows,
@@ -33,7 +33,7 @@ def _config(layers=None, rows=4, cols=12, res=1.0):
         x_min=0.0,
         y_min=0.0,
         res=res,
-        t_cu=np.array([35e-6] * len(layers or [F_Cu]), dtype=np.float64),
+        t_cu=np.array([copper_thickness_m] * len(layers or [F_Cu]), dtype=np.float64),
     )
 
 
