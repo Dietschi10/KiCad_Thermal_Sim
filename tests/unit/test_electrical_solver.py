@@ -11,6 +11,7 @@ from tests.mocks.pcbnew_mock import (
     B_Cu,
     EDA_RECT,
     F_Cu,
+    In1_Cu,
     MockBoard,
     MockFootprint,
     MockPad,
@@ -254,6 +255,37 @@ def test_via_connects_current_between_layers():
 
     assert result.valid, result.errors
     assert result.total_loss_w > 0.0
+
+
+def test_inner_layer_smd_pad_uses_its_copper_layer_set():
+    """SMD pads on an inner layer must join copper on that layer."""
+    pad_a = _pad(0.25, 1.25, "1", layer=F_Cu)
+    pad_b = _pad(9.25, 1.25, "2", layer=F_Cu)
+    pad_a._layer_set = type(pad_a.GetLayerSet())([In1_Cu])
+    pad_b._layer_set = type(pad_b.GetLayerSet())([In1_Cu])
+    track = MockTrack(
+        layer=In1_Cu,
+        bbox=EDA_RECT(250000, 1250000, 9100000, 100000),
+        start=VECTOR2I(500000, 1500000),
+        end=VECTOR2I(9500000, 1500000),
+        width=1000000,
+        net_code=1,
+        net_name="PWR",
+    )
+    board = MockBoard(
+        footprints=[MockFootprint(pads=[pad_a, pad_b])], tracks=[track]
+    )
+
+    result = solve_electrical_heating(
+        board,
+        [
+            CurrentTerminal(pad_a, "J1-1", "PWR", 1, 1.0),
+            CurrentTerminal(pad_b, "J2-1", "PWR", 1, -1.0),
+        ],
+        _config(layers=[F_Cu, In1_Cu]),
+    )
+
+    assert result.valid, result.errors
 
 
 def test_independent_nets_are_solved_separately():

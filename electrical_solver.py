@@ -641,12 +641,11 @@ def _build_relevant_net_masks(
                     mapped_cells=max(0, mapped_cells)
                 )
             else:
-                layer_id = pad.GetLayer()
-                layer_idx = lid_to_idx.get(layer_id)
-                if layer_idx is not None:
-                    mapped_cells = fill_for_obj(pad, [layer_id], bbox=bbox)
+                layer_ids = _pad_copper_layer_ids(pad, config.copper_ids)
+                if layer_ids:
+                    mapped_cells = fill_for_obj(pad, layer_ids, bbox=bbox)
                     record_primitive(
-                        key, "Pad", _layer_label(layer_id, config), bbox,
+                        key, "Pad", _layers_label(layer_ids, config), bbox,
                         mapped_cells=max(0, mapped_cells)
                     )
 
@@ -794,6 +793,24 @@ def _build_net_edges(
     )
 
 
+def _pad_copper_layer_ids(pad: Any, copper_ids: List[int]) -> List[int]:
+    """Return copper layer IDs occupied by a pad."""
+    try:
+        layer_set = pad.GetLayerSet()
+        layer_ids = [lid for lid in copper_ids if layer_set.Contains(lid)]
+        if layer_ids:
+            return layer_ids
+    except Exception:
+        pass
+    try:
+        layer_id = pad.GetLayer()
+        if layer_id in copper_ids:
+            return [layer_id]
+    except Exception:
+        pass
+    return []
+
+
 def _pad_node_indices(pad: Any, node_ids: np.ndarray, config: ElectricalConfig) -> np.ndarray:
     """Return electrical node IDs under a pad."""
     layers = []
@@ -801,9 +818,11 @@ def _pad_node_indices(pad: Any, node_ids: np.ndarray, config: ElectricalConfig) 
     if _is_pth_pad(pad):
         layers = list(range(len(config.copper_ids)))
     else:
-        layer_idx = lid_to_idx.get(pad.GetLayer())
-        if layer_idx is not None:
-            layers = [layer_idx]
+        layers = [
+            lid_to_idx[layer_id]
+            for layer_id in _pad_copper_layer_ids(pad, config.copper_ids)
+            if layer_id in lid_to_idx
+        ]
     rs, re, cs, ce = _bbox_indices(pad.GetBoundingBox(), config)
     if rs >= re or cs >= ce or not layers:
         return np.empty(0, dtype=np.int64)
@@ -891,10 +910,8 @@ def _pad_layer_label(pad: Any, config: ElectricalConfig) -> str:
     """Return the current terminal layer label."""
     if _is_pth_pad(pad):
         return "All copper (PTH)"
-    try:
-        return _layer_label(pad.GetLayer(), config)
-    except Exception:
-        return "n/a"
+    layer_ids = _pad_copper_layer_ids(pad, config.copper_ids)
+    return _layers_label(layer_ids, config)
 
 
 def _bbox_indices(bbox: Any, config: ElectricalConfig) -> Tuple[int, int, int, int]:

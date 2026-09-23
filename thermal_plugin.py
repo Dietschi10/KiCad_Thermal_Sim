@@ -136,6 +136,24 @@ def _bbox_to_power_indices(bbox, target_idx, rows, cols, x_min, y_min, res, rc):
     return target_idx * rc + (row_offsets[:, None] + col_offsets[None, :]).ravel(order="C")
 
 
+def _pad_copper_layer_ids(pad, copper_ids):
+    """Return copper layer IDs occupied by a pad."""
+    try:
+        layer_set = pad.GetLayerSet()
+        layer_ids = [lid for lid in copper_ids if layer_set.Contains(lid)]
+        if layer_ids:
+            return layer_ids
+    except Exception:
+        pass
+    try:
+        layer_id = pad.GetLayer()
+        if layer_id in copper_ids:
+            return [layer_id]
+    except Exception:
+        pass
+    return []
+
+
 def _pad_target_layer_index(board, copper_ids, pad, lid_to_idx):
     """
     Resolve the solver layer index for a pad.
@@ -156,12 +174,14 @@ def _pad_target_layer_index(board, copper_ids, pad, lid_to_idx):
     int
         Target copper layer index for the pad.
     """
-    pad_lid = pad.GetLayer()
-    target_idx = lid_to_idx.get(pad_lid)
-    if target_idx is not None:
-        return target_idx
+    layer_ids = _pad_copper_layer_ids(pad, copper_ids)
+    if layer_ids:
+        target_idx = lid_to_idx.get(layer_ids[0])
+        if target_idx is not None:
+            return target_idx
 
     try:
+        pad_lid = pad.GetLayer()
         lname = board.GetLayerName(pad_lid).upper()
     except Exception:
         lname = ""
@@ -929,7 +949,7 @@ class ThermalPlugin(pcbnew.ActionPlugin):
                     rect = pad.GetBoundingBox()
                     row = [
                         "pad", reference, pad.GetNumber(), pos.x, pos.y,
-                        pad.GetLayer(), rect.GetX(), rect.GetY(),
+                        tuple(_pad_copper_layer_ids(pad, copper_ids)), rect.GetX(), rect.GetY(),
                         rect.GetWidth(), rect.GetHeight(),
                     ]
                     for getter in ("GetShape", "GetSize", "GetOrientationDegrees"):
@@ -976,7 +996,8 @@ class ThermalPlugin(pcbnew.ActionPlugin):
         for pad in pads or []:
             try:
                 pos = pad.GetPosition()
-                pad_keys.append((pad.GetNumber(), pad.GetLayer(), pos.x, pos.y))
+                layer_ids = tuple(_pad_copper_layer_ids(pad, copper_ids))
+                pad_keys.append((pad.GetNumber(), layer_ids, pos.x, pos.y))
             except Exception:
                 pad_keys.append(id(pad))
         return geometry_cache_key(snapshot, grid, settings, pad_keys)
@@ -1304,7 +1325,10 @@ class ThermalPlugin(pcbnew.ActionPlugin):
                 return 0
 
     def _pad_layer_name(self, board, pad):
-        """Return the KiCad layer name for a pad."""
+        """Return the KiCad copper layer name for a pad."""
+        layer_ids = _pad_copper_layer_ids(pad, self.copper_ids)
+        if layer_ids:
+            return " / ".join(board.GetLayerName(lid) for lid in layer_ids)
         try:
             return board.GetLayerName(pad.GetLayer())
         except Exception:
@@ -1681,9 +1705,13 @@ class ThermalPlugin(pcbnew.ActionPlugin):
                 if pad.GetAttribute() == pcbnew.PAD_ATTRIB_PTH:
                     target_layers = range(len(self.copper_ids))
                 else:
-                    try:
-                        target_layers = [self.copper_ids.index(pad.GetLayer())]
-                    except ValueError:
+                    target_layers = [
+                        self.copper_ids.index(layer_id)
+                        for layer_id in _pad_copper_layer_ids(
+                            pad, self.copper_ids
+                        )
+                    ]
+                    if not target_layers:
                         target_layers = [0]
                 for layer_idx in target_layers:
                     for row, col in pixels:

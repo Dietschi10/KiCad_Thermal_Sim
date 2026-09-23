@@ -172,7 +172,8 @@ class MockPad:
         selected: bool = False,
         net_code: int = 0,
         net_name: str = "",
-        number: str = "1"
+        number: str = "1",
+        layers: Optional[List[int]] = None,
     ):
         self._position = position or VECTOR2I(0, 0)
         self._layer = layer
@@ -187,12 +188,16 @@ class MockPad:
         self._net_code = net_code
         self._net_name = net_name
         self._number = number
+        self._layer_set = MockLayerSet(layers or [layer])
 
     def GetPosition(self) -> VECTOR2I:
         return self._position
 
     def GetLayer(self) -> int:
         return self._layer
+
+    def GetLayerSet(self) -> MockLayerSet:
+        return self._layer_set
 
     def GetAttribute(self) -> int:
         return self._attribute
