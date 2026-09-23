@@ -466,6 +466,26 @@ class TestCurrentGroupSettings:
 
         assert balance_rows == [('PWR', '0 A', 'OK')]
 
+    def test_summarize_current_groups_uses_net_tie_supernet_balance(self):
+        from ThermalSim.electrical_solver import ElectricalSupernet
+        from ThermalSim.gui_dialogs import summarize_current_groups
+
+        supernet = ElectricalSupernet("C:1", ("C:1", "C:2"), ("IN", "OUT"))
+        groups = [{
+            'name': 'Net tie path',
+            'mode': 'per_pad',
+            'pads': [
+                {'pad_key': 'a', 'name': 'J1-1', 'net_name': 'IN', 'net_code': 1, 'current_a': 1.0},
+                {'pad_key': 'b', 'name': 'J2-1', 'net_name': 'OUT', 'net_code': 2, 'current_a': -1.0},
+            ],
+        }]
+
+        _, balance_rows = summarize_current_groups(
+            groups, {"C:1": supernet, "C:2": supernet}
+        )
+
+        assert balance_rows == [('IN + OUT', '0 A', 'OK')]
+
     def test_default_mode_is_per_pad_for_new_groups(self):
         from ThermalSim.gui_dialogs import prepare_current_groups
 

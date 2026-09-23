@@ -32,6 +32,7 @@ from .gui_dialogs import (
 from .electrical_solver import (
     CurrentTerminal,
     ElectricalConfig,
+    build_electrical_supernet_map,
     net_key_from_obj,
     net_key_from_values,
     solve_electrical_heating,
@@ -558,7 +559,9 @@ def _find_pcb_editor_parent(board=None):
     return best if best_score > 0 else active_top
 
 
-def _estimate_simulation_area(board, bbox, settings, power_pads=None, terminals=None):
+def _estimate_simulation_area(
+    board, bbox, settings, power_pads=None, terminals=None, electrical_supernets=None
+):
     """Build a safe rectangular domain around heat sources and current nets."""
     board_x0, board_y0, board_x1, board_y1 = _bbox_bounds_mm(bbox)
     board_w = max(0.0, board_x1 - board_x0)
@@ -573,13 +576,17 @@ def _estimate_simulation_area(board, bbox, settings, power_pads=None, terminals=
     active_terms = [
         item for item in (terminals or []) if abs(float(getattr(item, "current_a", 0.0))) > 0.0
     ]
-    active_keys = {
-        net_key_from_values(item.net_code, item.net_name) for item in active_terms
-    }
-    active_names = tuple(sorted({
-        str(item.net_name or net_key_from_values(item.net_code, item.net_name))
-        for item in active_terms
-    }))
+    electrical_supernets = electrical_supernets or build_electrical_supernet_map(board)
+    active_keys = set()
+    active_names = set()
+    for item in active_terms:
+        raw_key = net_key_from_values(item.net_code, item.net_name)
+        supernet = electrical_supernets.get(raw_key)
+        active_keys.update(supernet.member_keys if supernet else (raw_key,))
+        active_names.update(
+            supernet.member_names if supernet else (str(item.net_name or raw_key),)
+        )
+    active_names = tuple(sorted(active_names))
 
     if mode == "full":
         return AreaEstimate(
@@ -1143,6 +1150,7 @@ class ThermalPlugin(pcbnew.ActionPlugin):
         last_settings = self._load_settings()
         if last_settings.get("output_dir") and os.path.isdir(last_settings.get("output_dir")):
             default_output_dir = last_settings.get("output_dir")
+        electrical_supernets = build_electrical_supernet_map(board)
 
         if self.settings_dialog is not None:
             try:
@@ -1201,6 +1209,7 @@ class ThermalPlugin(pcbnew.ActionPlugin):
             defaults=last_settings,
             board_name=os.path.basename(board_path) if board_path else "Unsaved board",
             board_size_mm=(w_mm, h_mm),
+            electrical_supernets=electrical_supernets,
             defer_initial_preflight=True,
         )
         self.settings_dialog = dlg
@@ -1508,7 +1517,8 @@ class ThermalPlugin(pcbnew.ActionPlugin):
         current_pads = [item.pad for item in terminals]
         focus_pads = self._unique_pads(power_pads + current_pads)
         result.area = _estimate_simulation_area(
-            board, bbox, settings, power_pads=power_pads, terminals=terminals
+            board, bbox, settings, power_pads=power_pads, terminals=terminals,
+            electrical_supernets=build_electrical_supernet_map(board),
         )
         result.grid = _estimate_solver_grid(
             bbox, float(settings.get("res", 0.5)), settings, len(copper_ids),
@@ -1537,11 +1547,16 @@ class ThermalPlugin(pcbnew.ActionPlugin):
             if missing_current:
                 result.errors.append(f"{len(missing_current)} current-terminal pad(s) are missing from the board.")
             has_current = any(abs(float(item.current_a)) > 0.0 for item in terminals)
+            supernets = build_electrical_supernet_map(board)
             totals = {}
+            labels = {}
             for item in terminals:
-                net = item.net_name or f"net:{item.net_code}"
-                totals[net] = totals.get(net, 0.0) + float(item.current_a)
-            unbalanced = [name for name, total in totals.items() if abs(total) > 1e-9]
+                raw_key = net_key_from_values(item.net_code, item.net_name)
+                supernet = supernets.get(raw_key)
+                key = supernet.key if supernet else raw_key
+                totals[key] = totals.get(key, 0.0) + float(item.current_a)
+                labels[key] = supernet.display_name if supernet else (item.net_name or key)
+            unbalanced = [labels[key] for key, total in totals.items() if abs(total) > 1e-9]
             if unbalanced:
                 result.errors.append("Current is not balanced for: " + ", ".join(unbalanced[:3]))
 
@@ -1777,6 +1792,7 @@ class ThermalPlugin(pcbnew.ActionPlugin):
             board, bbox, settings,
             power_pads=area_power_pads,
             terminals=area_terminals,
+            electrical_supernets=build_electrical_supernet_map(board),
         )
         # Derive thicknesses
         stackup_derived = self._derive_stackup_thicknesses(board, copper_ids, stack_info, settings)
@@ -2048,6 +2064,15 @@ class ThermalPlugin(pcbnew.ActionPlugin):
                 electrical_key = stable_fingerprint({
                     "geometry": cache_key,
                     "copper_thickness_m": [float(value) for value in t_cu],
+                    "supernets": sorted(
+                        (
+                            raw_key,
+                            supernet.key,
+                            supernet.member_keys,
+                            supernet.member_names,
+                        )
+                        for raw_key, supernet in build_electrical_supernet_map(board).items()
+                    ),
                     "terminals": [
                         (item.name, item.net_name, int(item.net_code), float(item.current_a))
                         for item in terminals

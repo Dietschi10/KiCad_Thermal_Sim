@@ -189,6 +189,7 @@ class MockPad:
         self._net_name = net_name
         self._number = number
         self._layer_set = MockLayerSet(layers or [layer])
+        self._parent = None
 
     def GetPosition(self) -> VECTOR2I:
         return self._position
@@ -216,6 +217,10 @@ class MockPad:
 
     def GetNumber(self) -> str:
         return self._number
+
+    def GetParent(self):
+        """Return the footprint containing this pad."""
+        return self._parent
 
 
 class MockNet:
@@ -253,11 +258,13 @@ class MockTrack:
         width: int = 100000,
         net_code: int = 0,
         net_name: str = "",
+        mid: Optional[VECTOR2I] = None,
     ):
         self._layer = layer
         self._bbox = bbox or EDA_RECT(0, 0, 1000000, 100000)
         self._start = start
         self._end = end
+        self._mid = mid
         self._width = width
         self._net_code = net_code
         self._net_name = net_name
@@ -276,6 +283,12 @@ class MockTrack:
             self._bbox.GetX() + self._bbox.GetWidth(),
             self._bbox.GetY() + self._bbox.GetHeight() // 2,
         )
+
+    def GetMid(self):
+        """Return the optional midpoint used by KiCad arc tracks."""
+        if self._mid is None:
+            raise AttributeError("straight track has no midpoint")
+        return self._mid
 
     def GetWidth(self) -> int:
         return self._width
@@ -429,17 +442,33 @@ class MockFootprint:
         Reference designator (e.g., "U1").
     pads : list of MockPad, optional
         Pads belonging to this footprint.
+    net_tie_groups : list of list of MockPad, optional
+        Declared KiCad net-tie pad groups.
     """
 
-    def __init__(self, reference: str = "U1", pads: Optional[List[MockPad]] = None):
+    def __init__(
+        self,
+        reference: str = "U1",
+        pads: Optional[List[MockPad]] = None,
+        net_tie_groups: Optional[List[List[MockPad]]] = None,
+    ):
         self._reference = reference
         self._pads = pads or []
+        self._net_tie_groups = net_tie_groups or []
+        for pad in self._pads:
+            pad._parent = self
 
     def GetReference(self) -> str:
         return self._reference
 
     def Pads(self) -> List[MockPad]:
         return self._pads
+
+    def GetNetTiePads(self, pad: MockPad) -> List[MockPad]:
+        for group in self._net_tie_groups:
+            if any(member is pad for member in group):
+                return list(group)
+        return []
 
 
 class MockBoard:
