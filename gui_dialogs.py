@@ -35,6 +35,7 @@ TOOLTIP_TEXTS = {
     'power_apply': "Apply the Power field to selected power-pad rows. If no row is selected, it is applied to all rows.",
     'power_list': "Apply comma-separated power values in the same order as the power-pad table.",
     'browse_pwl': "Select a Piecewise-Linear (.pwl/.csv/.txt) file for time-varying power.",
+    'simulation_mode': "Steady state calculates thermal equilibrium directly; transient advances through time.",
     'duration': "Total simulation time in seconds. Longer durations approach steady-state.",
     'ambient': "Surrounding air temperature in \u00b0C. Typical lab conditions: 25 \u00b0C.",
     'resolution': "Desired grid cell size in mm. The compute budget may use a coarser actual size.",
@@ -681,6 +682,24 @@ class SettingsDialog(wx.Dialog):
         # --- Parameters ---
         box_params = wx.StaticBoxSizer(wx.VERTICAL, panel, "Simulation")
         params_parent = box_params.GetStaticBox()
+
+        mode_row = wx.BoxSizer(wx.HORIZONTAL)
+        mode_row.Add(
+            wx.StaticText(params_parent, label="Simulation Mode", size=(160, -1)),
+            0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5,
+        )
+        self.simulation_mode_choice = wx.Choice(
+            params_parent, choices=["Steady State", "Transient"]
+        )
+        self.simulation_mode_choice.SetSelection(1)
+        self.simulation_mode_choice.SetToolTip(TOOLTIP_TEXTS['simulation_mode'])
+        self.simulation_mode_choice.Bind(wx.EVT_CHOICE, self._on_simulation_mode_changed)
+        mode_row.Add(self.simulation_mode_choice, 1, wx.EXPAND)
+        box_params.Add(mode_row, 0, wx.EXPAND | wx.ALL, 2)
+        self.lbl_simulation_mode = wx.StaticText(
+            params_parent, label="Transient thermal solution"
+        )
+        box_params.Add(self.lbl_simulation_mode, 0, wx.EXPAND | wx.LEFT | wx.BOTTOM, 2)
 
         # Duration
         self.time_input = self._add_spin_field(
@@ -1640,7 +1659,24 @@ class SettingsDialog(wx.Dialog):
 
     def _on_snapshots_toggle(self, event):
         """Handle Snapshots checkbox toggle."""
-        self.snap_count_input.Enable(self.chk_snapshots.GetValue())
+        self.snap_count_input.Enable(
+            self.chk_snapshots.GetValue()
+            and self.simulation_mode_choice.GetSelection() != 0
+        )
+        self._refresh_preflight()
+
+    def _on_simulation_mode_changed(self, event):
+        """Disable transient-only controls for an equilibrium solve."""
+        steady_state = self.simulation_mode_choice.GetSelection() == 0
+        self.time_input.Enable(not steady_state)
+        self.chk_snapshots.Enable(not steady_state)
+        self.snap_count_input.Enable(
+            not steady_state and self.chk_snapshots.GetValue()
+        )
+        self.lbl_simulation_mode.SetLabel(
+            "Steady-state thermal solution" if steady_state
+            else "Transient thermal solution"
+        )
         self._refresh_preflight()
 
     def _on_heatsink_toggle(self, event):
@@ -2277,6 +2313,11 @@ class SettingsDialog(wx.Dialog):
             return {
                 'power_str': power_str,
                 'power_pads': power_pads,
+                'simulation_mode': (
+                    'steady_state'
+                    if self.simulation_mode_choice.GetSelection() == 0
+                    else 'transient'
+                ),
                 'time': float(self.time_input.GetValue()),
                 'amb': float(self.amb_input.GetValue()),
                 'thick': float(self.thick_input.GetValue()),
@@ -2329,6 +2370,10 @@ class SettingsDialog(wx.Dialog):
 
             if 'time' in defaults:
                 self.time_input.SetValue(float(defaults['time']))
+            simulation_mode = str(defaults.get('simulation_mode', 'transient')).lower()
+            self.simulation_mode_choice.SetSelection(
+                0 if simulation_mode in {'steady', 'steady_state', 'steady-state'} else 1
+            )
             if 'amb' in defaults:
                 self.amb_input.SetValue(float(defaults['amb']))
             if 'thick' in defaults:
@@ -2344,7 +2389,16 @@ class SettingsDialog(wx.Dialog):
             )
             if 'snap_count' in defaults:
                 self.snap_count_input.SetValue(int(defaults['snap_count']))
-            self.snap_count_input.Enable(self.chk_snapshots.GetValue())
+            steady_state = self.simulation_mode_choice.GetSelection() == 0
+            self.time_input.Enable(not steady_state)
+            self.chk_snapshots.Enable(not steady_state)
+            self.snap_count_input.Enable(
+                not steady_state and self.chk_snapshots.GetValue()
+            )
+            self.lbl_simulation_mode.SetLabel(
+                "Steady-state thermal solution" if steady_state
+                else "Transient thermal solution"
+            )
 
             out_dir = defaults.get('output_dir')
             if out_dir:

@@ -47,6 +47,8 @@ from .thermal_solver import (
     build_structured_operator,
     run_simulation,
     run_simulation_matrix_free,
+    run_steady_state,
+    run_steady_state_matrix_free,
 )
 from .pwl_parser import parse_pwl_file
 from .visualization import (
@@ -1591,6 +1593,11 @@ class ThermalPlugin(pcbnew.ActionPlugin):
             except ValueError:
                 try:
                     _, pwl_values = parse_pwl_file(value)
+                    if settings.get("simulation_mode") == "steady_state":
+                        result.errors.append(
+                            "Time-dependent heat sources are not supported in steady-state mode. "
+                            "Use Transient mode or replace the source with a constant power value."
+                        )
                     has_power = has_power or bool(np.any(np.asarray(pwl_values) != 0.0))
                 except Exception as exc:
                     result.errors.append(f"Invalid PWL source '{value}': {exc}")
@@ -2006,6 +2013,9 @@ class ThermalPlugin(pcbnew.ActionPlugin):
         dx = res * 1e-3
         dy = dx
         sim_time = settings['time']
+        simulation_mode = str(settings.get("simulation_mode", "transient")).lower()
+        if simulation_mode not in {"transient", "steady_state"}:
+            simulation_mode = "transient"
         steps_target = max(1, min(600, max(80, int(120 * (sim_time ** 0.35)))))
         dt = sim_time / steps_target
 
@@ -2112,6 +2122,17 @@ class ThermalPlugin(pcbnew.ActionPlugin):
                     )
                     set_dialog_state("failed", "A PWL power profile could not be read.")
                     return
+
+        if simulation_mode == "steady_state" and any(
+            source_type == "pwl" for source_type, _ in pad_sources
+        ):
+            wx.MessageBox(
+                "Time-dependent heat sources are not supported in steady-state mode.\n\n"
+                "Use Transient mode or replace the source with a constant power value.",
+                "Steady-State Source Error",
+            )
+            set_dialog_state("failed", "Steady state requires constant heat sources.")
+            return
 
         if len(pad_sources) == 1 and len(power_pads) > 1:
             pad_sources = pad_sources * len(power_pads)
@@ -2287,11 +2308,15 @@ class ThermalPlugin(pcbnew.ActionPlugin):
                 "adaptive_max_cell_ratio": 1,
             })
         print(f"[ThermalSim] init timings: {_format_timing_summary(init_timings)}")
-        set_dialog_state("running", "Starting transient solver...")
+        set_dialog_state(
+            "running",
+            "Starting steady-state solver..." if simulation_mode == "steady_state"
+            else "Starting transient solver...",
+        )
 
         # Snapshot configuration
         snap_times = []
-        if settings.get('snapshots'):
+        if simulation_mode == "transient" and settings.get('snapshots'):
             snap_count = max(1, min(50, int(settings.get('snap_count', 5))))
             snap_times = [sim_time * (k / (snap_count + 1)) for k in range(1, snap_count + 1)]
         snap_times = sorted({t for t in snap_times if 0.0 < t < sim_time})
@@ -2339,8 +2364,9 @@ class ThermalPlugin(pcbnew.ActionPlugin):
             ),
             use_multi_phase=True,
             time_stepping=configured_time_stepping,
-            snapshots_enabled=settings.get('snapshots', False),
-            snap_times=snap_times
+            snapshots_enabled=(simulation_mode == "transient" and settings.get('snapshots', False)),
+            snap_times=snap_times,
+            simulation_mode=simulation_mode,
         )
         factorization_cache_key = stable_fingerprint({
             "operator": operator_key,
@@ -2387,27 +2413,39 @@ class ThermalPlugin(pcbnew.ActionPlugin):
                         if adaptive_system is not None
                         else Q_func
                     )
-                    worker_result["result"] = run_simulation_matrix_free(
-                        config, solver_operator, solver_capacity, solver_power,
-                        solver_boundary, solver_h_area,
-                        progress_callback, solver_snapshot_callback,
-                        Q_func=solver_power_func,
-                        cancel_check=lambda: cancel_token.cancelled,
-                    )
+                    if simulation_mode == "steady_state":
+                        worker_result["result"] = run_steady_state_matrix_free(
+                            config, solver_operator, solver_power, solver_h_area,
+                            progress_callback, cancel_check=lambda: cancel_token.cancelled,
+                        )
+                    else:
+                        worker_result["result"] = run_simulation_matrix_free(
+                            config, solver_operator, solver_capacity, solver_power,
+                            solver_boundary, solver_h_area,
+                            progress_callback, solver_snapshot_callback,
+                            Q_func=solver_power_func,
+                            cancel_check=lambda: cancel_token.cancelled,
+                        )
                     if adaptive_system is not None:
                         worker_result["result"].T = adaptive_system.mesh.prolong(
                             worker_result["result"].T.reshape(-1), layer_count
                         )
                 else:
-                    worker_result["result"] = run_simulation(
-                        config, K_matrix, C, Q, b, hA,
-                        layer_count, rows, cols,
-                        progress_callback, snapshot_callback,
-                        Q_func=Q_func,
-                        cancel_check=lambda: cancel_token.cancelled,
-                        factorization_cache=self.factorization_cache,
-                        factorization_cache_key=factorization_cache_key,
-                    )
+                    if simulation_mode == "steady_state":
+                        worker_result["result"] = run_steady_state(
+                            config, K_matrix, Q, hA, layer_count, rows, cols,
+                            progress_callback, cancel_check=lambda: cancel_token.cancelled,
+                        )
+                    else:
+                        worker_result["result"] = run_simulation(
+                            config, K_matrix, C, Q, b, hA,
+                            layer_count, rows, cols,
+                            progress_callback, snapshot_callback,
+                            Q_func=Q_func,
+                            cancel_check=lambda: cancel_token.cancelled,
+                            factorization_cache=self.factorization_cache,
+                            factorization_cache_key=factorization_cache_key,
+                        )
             except Exception:
                 fast_traceback = traceback.format_exc()
                 if use_fast_engine and N <= 1_000_000 and not cancel_token.cancelled:
@@ -2434,24 +2472,32 @@ class ThermalPlugin(pcbnew.ActionPlugin):
                             ),
                             use_multi_phase=True,
                             time_stepping=settings.get("time_stepping", "auto"),
-                            snapshots_enabled=settings.get("snapshots", False),
+                            snapshots_enabled=(simulation_mode == "transient" and settings.get("snapshots", False)),
                             snap_times=snap_times,
+                            simulation_mode=simulation_mode,
                         )
-                        worker_result["result"] = run_simulation(
-                            fallback_config,
-                            fallback_matrix,
-                            C,
-                            Q,
-                            fallback_b,
-                            fallback_h_area,
-                            layer_count,
-                            rows,
-                            cols,
-                            progress_callback,
-                            snapshot_callback,
-                            Q_func=Q_func,
-                            cancel_check=lambda: cancel_token.cancelled,
-                        )
+                        if simulation_mode == "steady_state":
+                            worker_result["result"] = run_steady_state(
+                                fallback_config, fallback_matrix, Q, fallback_h_area,
+                                layer_count, rows, cols, progress_callback,
+                                cancel_check=lambda: cancel_token.cancelled,
+                            )
+                        else:
+                            worker_result["result"] = run_simulation(
+                                fallback_config,
+                                fallback_matrix,
+                                C,
+                                Q,
+                                fallback_b,
+                                fallback_h_area,
+                                layer_count,
+                                rows,
+                                cols,
+                                progress_callback,
+                                snapshot_callback,
+                                Q_func=Q_func,
+                                cancel_check=lambda: cancel_token.cancelled,
+                            )
                         worker_result["result"].k_norm_info.update({
                             "compute_engine": "legacy_fallback",
                             "fast_engine_error": fast_traceback,
@@ -2478,7 +2524,8 @@ class ThermalPlugin(pcbnew.ActionPlugin):
             total = progress_state["total"]
             percent = int((current / total) * 100) if total else 0
             try:
-                update_result = pd.Update(percent, f"Solving thermal model - step {current}/{total}")
+                label = "Solving steady-state thermal model" if simulation_mode == "steady_state" else "Solving thermal model"
+                update_result = pd.Update(percent, f"{label} - step {current}/{total}")
                 keep_going = update_result[0] if isinstance(update_result, tuple) else update_result
                 if not keep_going or (hasattr(pd, "WasCancelled") and pd.WasCancelled()):
                     cancel_token.cancel()
@@ -2543,18 +2590,21 @@ class ThermalPlugin(pcbnew.ActionPlugin):
             "process_peak_working_set_mb": get_process_memory_mb(peak=True),
             "factorization_cache_hit": result.k_norm_info.get("factorization_cache_hit"),
             "electrical_summary": electrical_summary,
+            "simulation_mode": simulation_mode,
         })
 
         # Save results
         if settings['show_all']:
             heatmap_path = show_results_all_layers(
                 result.T, H_map, amb, layer_names,
-                open_file=False, t_elapsed=sim_time, out_dir=run_dir
+                open_file=False, t_elapsed=sim_time if simulation_mode == "transient" else None,
+                out_dir=run_dir, steady_state=simulation_mode == "steady_state",
             )
         else:
             heatmap_path = show_results_top_bot(
                 result.T, H_map, amb,
-                open_file=False, t_elapsed=sim_time, out_dir=run_dir
+                open_file=False, t_elapsed=sim_time if simulation_mode == "transient" else None,
+                out_dir=run_dir, steady_state=simulation_mode == "steady_state",
             )
 
         joule_map_path = None
@@ -2593,7 +2643,8 @@ class ThermalPlugin(pcbnew.ActionPlugin):
         )
 
         snapshot_debug = {
-            "snapshots_enabled": settings.get('snapshots'),
+            "simulation_mode": simulation_mode,
+            "snapshots_enabled": simulation_mode == "transient" and settings.get('snapshots'),
             "snap_count": settings.get('snap_count'),
             "dt_base": dt,
             "steps_target": steps_target,

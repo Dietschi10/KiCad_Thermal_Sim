@@ -869,6 +869,17 @@ class TestSettingsDialogInstantiation:
         values = dlg.get_values()
         assert values['h_conv'] == 10.0
 
+    def test_steady_state_mode_is_saved_and_disables_transient_settings(self):
+        """Equilibrium mode should persist independently of legacy duration settings."""
+        from ThermalSim.gui_dialogs import SettingsDialog
+        dlg = SettingsDialog(
+            None, 1, 0.5, ["F.Cu", "B.Cu"],
+            defaults={'simulation_mode': 'steady_state', 'snapshots': True},
+        )
+
+        assert dlg.get_values()['simulation_mode'] == 'steady_state'
+        assert dlg.lbl_simulation_mode.GetLabel() == 'Steady-state thermal solution'
+
     def test_apply_defaults_with_h_conv(self):
         """Test that _apply_defaults sets h_conv from saved settings."""
         from ThermalSim.gui_dialogs import SettingsDialog

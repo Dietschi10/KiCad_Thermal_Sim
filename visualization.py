@@ -346,7 +346,8 @@ def save_joule_loss_map(
     return output_file
 
 
-def show_results_top_bot(T, H, amb, open_file=True, t_elapsed=None, out_dir=None):
+def show_results_top_bot(T, H, amb, open_file=True, t_elapsed=None, out_dir=None,
+                         steady_state=False):
     """
     Save and optionally display top/bottom layer temperature results.
 
@@ -377,7 +378,9 @@ def show_results_top_bot(T, H, amb, open_file=True, t_elapsed=None, out_dir=None
         vmax = amb + 250
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-    time_label = f"t = {t_elapsed:.1f} s - " if t_elapsed is not None else ""
+    time_label = "Steady State - " if steady_state else (
+        f"t = {t_elapsed:.1f} s - " if t_elapsed is not None else ""
+    )
     ax1.set_title(f"TOP Layer ({time_label}Max: {np.max(T[0]):.1f} C)")
     im1 = ax1.imshow(
         T[0], cmap='inferno', origin='upper',
@@ -401,7 +404,8 @@ def show_results_top_bot(T, H, amb, open_file=True, t_elapsed=None, out_dir=None
     return output_file
 
 
-def show_results_all_layers(T, H, amb, layer_names, open_file=True, t_elapsed=None, out_dir=None):
+def show_results_all_layers(T, H, amb, layer_names, open_file=True, t_elapsed=None,
+                            out_dir=None, steady_state=False):
     """
     Save and optionally display all-layer temperature results.
 
@@ -463,7 +467,9 @@ def show_results_all_layers(T, H, amb, layer_names, open_file=True, t_elapsed=No
         ax = axes[i]
         name = labels[i]
         max_temp = np.max(T[i])
-        time_label = f"t = {t_elapsed:.1f} s - " if t_elapsed is not None else ""
+        time_label = "Steady State - " if steady_state else (
+            f"t = {t_elapsed:.1f} s - " if t_elapsed is not None else ""
+        )
         ax.set_title(f"{name} - {time_label}Max: {max_temp:.1f}C")
         im = ax.imshow(
             T[i], cmap='inferno', origin='upper',

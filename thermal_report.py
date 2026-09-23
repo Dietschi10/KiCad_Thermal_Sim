@@ -138,6 +138,7 @@ def _build_snapshot_items(out_dir, snapshot_files):
 
 def _build_summary_metrics(settings, interactive_heatmap, k_norm_info, snapshot_debug):
     """Build top-level summary metrics."""
+    steady_state = str(settings.get("simulation_mode", "transient")).lower() == "steady_state"
     layers = (interactive_heatmap or {}).get("layers", [])
     top_layer = layers[0] if layers else None
     bottom_layer = layers[-1] if layers else None
@@ -198,18 +199,19 @@ def _build_summary_metrics(settings, interactive_heatmap, k_norm_info, snapshot_
         if reduction is not None:
             mesh_detail += f"; {float(reduction):.1f}x reduction"
     metrics = [
-        ("Duration", f"{float(settings.get('time', 0.0)):.2f} s" if "time" in settings else "n/a", None),
+        ("Simulation Mode", "Steady State" if steady_state else "Transient", None),
+        ("Duration", "N/A" if steady_state else (f"{float(settings.get('time', 0.0)):.2f} s" if "time" in settings else "n/a"), None),
         ("Ambient", f"{float(settings.get('amb', 0.0)):.2f} C" if "amb" in settings else "n/a", None),
         ("Resolution", f"{float(actual_res):.3f} mm" if actual_res is not None else "n/a", res_detail),
         ("Visible Layers", str(len(layers)), ", ".join(layer.get("name", "") for layer in layers) if layers else None),
         ("Top Peak", f"{float(top_layer.get('max_c')):.2f} C" if top_layer and top_layer.get("max_c") is not None else "n/a", top_layer.get("name") if top_layer else None),
         ("Bottom Peak", f"{float(bottom_layer.get('max_c')):.2f} C" if bottom_layer and bottom_layer.get("max_c") is not None else "n/a", bottom_layer.get("name") if bottom_layer else None),
         ("Overall Peak", f"{float(overall_peak):.2f} C" if overall_peak is not None else "n/a", None),
-        ("Solver", str((k_norm_info or {}).get("backend", "n/a")), f"steps: {(k_norm_info or {}).get('steps_total', 'n/a')}"),
+        ("Solver", str((k_norm_info or {}).get("backend", "n/a")), (f"residual: {_fmt_compact((k_norm_info or {}).get('relative_residual'))}" if steady_state else f"steps: {(k_norm_info or {}).get('steps_total', 'n/a')}")),
         ("Mesh", mesh_value, mesh_detail),
         ("Input Power", f"{float((k_norm_info or {}).get('pin_w')):.3f} W" if (k_norm_info or {}).get("pin_w") is not None else "n/a", None),
         ("Final Cooling", f"{float((k_norm_info or {}).get('pout_final_w')):.3f} W" if (k_norm_info or {}).get("pout_final_w") is not None else "n/a", None),
-        ("Snapshots", "enabled" if settings.get("snapshots") else "disabled", f"target: {settings.get('snap_count', 0)}"),
+        ("Snapshots", "N/A" if steady_state else ("enabled" if settings.get("snapshots") else "disabled"), None if steady_state else f"target: {settings.get('snap_count', 0)}"),
         ("Output Folder", os.path.basename(str((snapshot_debug or {}).get("run_dir", ""))) or "n/a", None),
     ]
     featured_labels = {"Overall Peak", "Input Power", "Resolution", "Solver", "Mesh"}
@@ -590,6 +592,7 @@ def write_html_report(
     ]
 
     solver_summary = {
+        "simulation_mode": k_norm_info.get("simulation_mode", settings.get("simulation_mode", "transient")),
         "strategy": k_norm_info.get("strategy"),
         "backend": k_norm_info.get("backend"),
         "multi_phase": k_norm_info.get("multi_phase"),
@@ -601,6 +604,11 @@ def write_html_report(
         "pin_w": k_norm_info.get("pin_w"),
         "pout_final_w": k_norm_info.get("pout_final_w"),
         "steady_rel_diff": k_norm_info.get("steady_rel_diff"),
+        "pcg_iterations": k_norm_info.get("pcg_iterations"),
+        "relative_residual": k_norm_info.get("relative_residual"),
+        "convergence_tolerance": k_norm_info.get("convergence_tolerance"),
+        "converged": k_norm_info.get("converged"),
+        "energy_balance_warning": k_norm_info.get("energy_balance_warning"),
     }
     solver_summary = {key: value for key, value in solver_summary.items() if value is not None}
 

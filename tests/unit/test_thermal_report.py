@@ -693,3 +693,21 @@ class TestWriteHtmlReportEdgeCases:
         # Special chars should be escaped
         assert '&lt;special&gt;' in content
         assert 'R&amp;D' in content
+
+    def test_steady_state_summary_omits_duration_and_snapshots(self, temp_dir):
+        """Equilibrium reports should not imply a transient time history."""
+        params = {
+            'settings': {'simulation_mode': 'steady_state', 'snapshots': True},
+            'stack_info': {}, 'stackup_derived': {}, 'pad_power': [],
+            'layer_names': [], 'preview_path': None, 'heatmap_path': None,
+            'out_dir': temp_dir, 'k_norm_info': {
+            'simulation_mode': 'steady_state', 'backend': 'MatrixFree-PCG',
+            'relative_residual': 1e-8,
+            },
+        }
+        result = write_html_report(**params)
+
+        content = open(result, encoding='utf-8').read()
+        assert 'Simulation Mode' in content
+        assert 'Steady State' in content
+        assert 'Duration' in content
