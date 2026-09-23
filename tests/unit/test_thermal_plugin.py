@@ -144,6 +144,42 @@ class TestStartupSafety:
 
         assert _find_pcb_editor_parent() is editor
 
+    def test_solver_progress_dialog_uses_thermal_sim_parent(self, monkeypatch):
+        """Solver progress should remain above ThermalSim and the PCB Editor."""
+        import ThermalSim.thermal_plugin as thermal_plugin_module
+        from ThermalSim.thermal_plugin import ThermalPlugin
+
+        class ProgressDialog:
+            def __init__(self, *args, **kwargs):
+                self.parent = kwargs.get("parent")
+                self.centered = False
+                self.raised = False
+
+            def CentreOnParent(self):
+                self.centered = True
+
+            def Raise(self):
+                self.raised = True
+
+        monkeypatch.setattr(
+            thermal_plugin_module.wx, "ProgressDialog", ProgressDialog,
+            raising=False,
+        )
+        plugin = ThermalPlugin()
+        plugin.defaults()
+        settings_dialog = object()
+        host_window = object()
+        plugin.settings_dialog = settings_dialog
+        plugin.host_window = host_window
+
+        dialog = plugin._create_solver_progress_dialog()
+        assert dialog.parent is settings_dialog
+        assert dialog.centered and dialog.raised
+
+        plugin.settings_dialog = None
+        fallback = plugin._create_solver_progress_dialog()
+        assert fallback.parent is host_window
+
 
 class TestFr4ControlVolumes:
     """Regression tests for conserved dielectric control-volume thickness."""

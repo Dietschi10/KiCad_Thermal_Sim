@@ -897,6 +897,28 @@ class ThermalPlugin(pcbnew.ActionPlugin):
             pass
         self.startup_dialog = None
 
+    def _create_solver_progress_dialog(self):
+        """Create a solver progress dialog owned by the active ThermalSim UI."""
+        parent = (
+            self.settings_dialog
+            if self.settings_dialog is not None
+            else self.host_window
+        )
+        dialog = wx.ProgressDialog(
+            "ThermalSim", "Preparing thermal model...", 100,
+            parent=parent,
+            style=(
+                wx.PD_CAN_ABORT | wx.PD_APP_MODAL | wx.PD_REMAINING_TIME
+                | wx.PD_AUTO_HIDE
+            ),
+        )
+        for method_name in ("CentreOnParent", "Raise"):
+            try:
+                getattr(dialog, method_name)()
+            except Exception:
+                pass
+        return dialog
+
     def _count_unfilled_copper_zones(self, board):
         """Return the number of normal copper zones without a valid fill."""
         try:
@@ -2322,10 +2344,7 @@ class ThermalPlugin(pcbnew.ActionPlugin):
         snap_times = sorted({t for t in snap_times if 0.0 < t < sim_time})
 
         # Progress dialog
-        pd = wx.ProgressDialog(
-            "ThermalSim", "Preparing thermal model...", 100,
-            style=wx.PD_CAN_ABORT | wx.PD_APP_MODAL | wx.PD_REMAINING_TIME | wx.PD_AUTO_HIDE
-        )
+        pd = self._create_solver_progress_dialog()
 
         progress_state = {"current": 0, "total": 1}
         cancel_token = CancellationToken()
